@@ -44,8 +44,6 @@ class AutoTester:
         seed = None
         host = None
         url_comp = None
-        self.nm = None
-        self.dir_tree = None
         seed = raw_input("\nEnter the URL of the web application you would like to begin testing:\n>")
         try:
             url_comp = urlparse(seed)
@@ -65,6 +63,8 @@ class AutoTester:
             self.zap.core.new_session()
         except:
             pass
+        self.nm = None
+        self.dir_tree = None
         self.host = url_comp[1]
         self.seed = seed
         self.zap = ZAPv2()
