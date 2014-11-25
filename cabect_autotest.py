@@ -15,48 +15,63 @@ import nmap
 class AutoTester:
     
     #initialize the AutoTester object
-    def __init__(self, host, seed):
-        self.host = host
-        self.seed = seed
+    def __init__(self):
+        self.host = None
+        self.seed = None
         self.zap = ZAPv2()
-        self.nm = nmap.PortScanner()
+        self.nm = None
         self.alerts = {}
+        self.dir_tree = None
         self.subproc = None
+        self.startup()
+        
+    #first screen of the program. the hostname of the target is entered here.
+    def startup(self):
+        os.system('cls' if os.name == 'nt' else 'clear')
+        print "              /////////////////////////////////////////"
+        print "                       OWASP PEN TESTING TOOL          "
+        print "                           (Working Title)             "
+        print "              /////////////////////////////////////////"
+        status = 500
+        host = None
+        seed = None
+        while not self.set_target():
+            pass
         self.main_menu()
         
     #accepts user input to change the host and seed of the target
-    def change_target(self):
-        status = 500
+    def set_target(self):
         seed = None
         host = None
-        self.alerts["nmap"] = None
-        while status >= 400:
-            seed = raw_input("\nEnter the URL of the web application you would like to begin testing:\n>")
-            try:
-                status = requests.get(seed).status_code
-                host = urlparse(seed)[1]
-                try:
-                    socket.gethostbyname(host)
-                except:
-                    print "Error. Invalid host " + host
-                    status = 500
-                    continue
-            except:
-                status = 404
-            if(status >= 400):
-                print "Error. Couldn't connected to " + seed + "\nStatus code: " + str(status) + ""
+        url_comp = None
+        self.nm = None
+        self.dir_tree = None
+        seed = raw_input("\nEnter the URL of the web application you would like to begin testing:\n>")
+        try:
+            url_comp = urlparse(seed)
+            if url_comp[0] == "":
+                seed = "http://" + seed
+            else:
+                seed = seed
+            url_comp = urlparse(seed)
+            status = requests.get(seed).status_code
+            socket.gethostbyname(url_comp[1])
+        except:
+            status = 404
+        if(status >= 400):
+            print "Error. Couldn't connect to " + seed + "\nStatus code: " + str(status) + ""
+            return False
         try:
             self.zap.core.new_session()
         except:
             pass
-        try:
-            del self.alerts["zap"]
-        except:
-            pass
-        self.host = host
+        self.host = url_comp[1]
         self.seed = seed
-        print "Target changed successfully!"
+        self.zap = ZAPv2()
+        self.alerts = {}
+        print "Target set successfully!"
         raw_input("[Press Enter to continue]")
+        return True
         
     #clear the screen
     def clear(self):
@@ -78,8 +93,10 @@ class AutoTester:
             print "Current # of web app alerts: 0"
         try:
             server_alerts = 0
-            for port in self.alerts["nmap"]:
-                server_alerts += len(self.alerts["nmap"][port])
+            for protocol in self.nm[self.host].all_protocols():
+                for port in self.nm[self.host][protocol]:
+                    if 'script' in self.nm[self.host][protocol][port]:
+                        server_alerts += len(self.nm[self.host][protocol][port]['script'])
             print "Current # of server alerts: " + str(server_alerts)
         except:
             print "Current # of server alerts: 0"
@@ -98,21 +115,22 @@ class AutoTester:
         self.print_header()
         print "Beginning pentest setup of '" + self.seed + "'"
         print "Accessing target..."
-        error_count = 0
-        FNULL = open(os.devnull, "w")
-        self.subproc = Popen(["bash", "ZAP_2.3.1/zap.sh"], stdout=FNULL)
-        while True:
-            try:
-                self.zap.urlopen(self.seed)
-                break
-            except:
-                if(error_count == 0):
-                    print "Waiting for ZAP to initialize..."
-                    error_count+=1
-                    time.sleep(2)
+        if self.subproc is None:
+            error_count = 0
+            FNULL = open(os.devnull, "w")
+            self.subproc = Popen(["bash", "ZAP_2.3.1/zap.sh"], stdout=FNULL)
+            while True:
+                try:
+                    self.zap.urlopen(self.seed)
+                    break
+                except:
+                    if(error_count == 0):
+                        print "Waiting for ZAP to initialize..."
+                        error_count+=1
+                        time.sleep(2)
         time.sleep(2)
         self.zap_crawl()
-        print "Starting passive scanner..."
+        print "Waiting for passive scanner..."
         time.sleep(5)
         print "Pentest setup completed\n"
         print "Scanning target..."
@@ -132,6 +150,7 @@ class AutoTester:
             print "Spider progress: " + self.zap.spider.status + "%",
             self.restart_line()
             time.sleep(2)
+        self.dir_tree = self.zap.spider.results
         print "Crawling completed               "
     
     #perform the ZAP scan to get a list of alerts
@@ -141,10 +160,9 @@ class AutoTester:
             print "Scan progress: " + self.zap.ascan.status + "%",
             self.restart_line()
             time.sleep(2)
-        print "Sorting alerts..."
         zap_alerts = defaultdict(list)
         for alert in self.zap.core.alerts():
-           zap_alerts[alert.get("alert")].append(alert)
+            zap_alerts[alert.get("alert")].append(alert)
         self.alerts["zap"] = zap_alerts
 
     #write the results of the web app alerts to logfiles
@@ -169,24 +187,16 @@ class AutoTester:
         
     #perform the nmap penetration test to find server vulnerabilities
     def nmap_pentest(self):
+        self.nm = nmap.PortScanner()
         self.clear()
         self.print_header()
         print "Scanning host server for vulnerabilities..."
         self.nm.scan(hosts=self.host, arguments="--script vuln -sV")
         print "Scanning complete."
-        port_alerts = defaultdict(list)
         print "Open ports:"
-        for port in self.nm[self.host].all_tcp():
-            print str(port) + ": " + self.nm[self.host]['tcp'][port]['name']
-            if 'script' in self.nm[self.host]['tcp'][port]:
-                for alert in self.nm[self.host]['tcp'][port]['script']:
-                    port_alerts[port].append(alert)
-        print ""
-        for port in port_alerts:
-            print "Alerts for port: " + str(port)
-            for alert in port_alerts[port]:
-                print alert
-        self.alerts["nmap"] = port_alerts
+        for protocol in self.nm[self.host].all_protocols():
+            for port in self.nm[self.host][protocol]: 
+                print str(port) + ": " + self.nm[self.host][protocol][port]['name']
         print "\nWriting results to logs..."
         self.write_server_logs()
         print "Logfile server.log has been recorded"
@@ -196,13 +206,16 @@ class AutoTester:
     def write_server_logs(self):
         with open("server.log", "w") as fout:
             fout.write("Server alerts for '" + self.host + "\n")
-            for port in self.alerts["nmap"]:
-                fout.write("Vulnerabilities on port " + str(port) + " (" + self.nm[self.host]['tcp'][port]['name'] + ")\n")
-                for alert in self.nm[self.host]['tcp'][port]['script']:
-                    fout.write("{\n")
-                    fout.write(alert.encode("ascii") + "\n")
-                    fout.write("}\n")
-    
+            for protocol in self.nm[self.host].all_protocols():
+                for port in self.nm[self.host][protocol]:
+                    fout.write("Vulnerabilities on port " + str(port) + " (" + self.nm[self.host][protocol][port]['name'] + ")\n")
+                    if 'script' in self.nm[self.host][protocol][port]:
+                        for alert in self.nm[self.host][protocol][port]['script']:
+                            fout.write("{\n")
+                            fout.write(alert + ":\n")
+                            fout.write(self.nm[self.host][protocol][port]['script'][alert])
+                            fout.write("}\n")
+                
     #main menu of the program. user can perform scans and view alerts among other tasks here.
     def main_menu(self):
         choice = 0
@@ -227,8 +240,7 @@ class AutoTester:
                 self.nmap_pentest()
             elif choice == "3":
                 try:
-                    dir_tree = self.zap.spider.results
-                    for dir in dir_tree:
+                    for dir in self.dir_tree:
                         print dir.encode("ascii")
                 except:
                     print "Nothing scanned."
@@ -238,8 +250,8 @@ class AutoTester:
             elif choice == "5":
                 self.server_alerts_menu()
             elif choice == "6":
-                self.change_target()
-                dir_tree = None
+                if not self.set_target():
+                    raw_input("[Press Enter to continue]")
             elif choice == "7":
                 if self.subproc is not None:
                     self.subproc.kill()
@@ -247,13 +259,16 @@ class AutoTester:
             else:
                 print "Invalid input."
                 raw_input("[Press Enter to continue]")
-                
+    
+    #menu to select the web app alerts by priority
     def webapp_alerts_menu(self):
         choice = 0
         try:
             self.alerts["zap"]
         except:
-            self.alerts["zap"] = {}
+            print "No web application alerts could be found."
+            raw_input("[Press Enter to continue]")
+            return
         while choice is not "6":
             self.clear()
             self.print_header()
@@ -270,7 +285,9 @@ class AutoTester:
             choice = raw_input(">")
             priority_list = defaultdict(list)
             if choice == "1":
-                self.webapp_selection_menu(self.alerts["zap"], "All")
+                for alert in self.alerts["zap"]:
+                    priority_list[alert] = self.alerts["zap"][alert]
+                self.webapp_selection_menu(priority_list, "All")
             elif choice == "2":
                 for alert in self.alerts["zap"]:
                     if(self.alerts["zap"][alert][0].get("risk") == "High"):
@@ -296,28 +313,42 @@ class AutoTester:
             else:
                 print "Invalid input."
                 raw_input("[Press Enter to continue]")
-                
+    
+    #menu to select server alerts by port number
     def server_alerts_menu(self):
         choice = 0
         try:
-            self.alerts["nmap"]
+            self.nm[self.host]
         except:
-            self.alerts["nmap"] = {}
+            print "No server alerts could be found."
+            raw_input("[Press Enter to continue]")
+            return
         server_alerts = 0
-        for port in self.alerts["nmap"]:
-            server_alerts += 1
+        for protocol in self.nm[self.host].all_protocols():
+                for port in self.nm[self.host][protocol]:
+                    if 'script' in self.nm[self.host][protocol][port]:
+                        server_alerts+=1
+        if server_alerts == 0:
+            print "No server alerts could be found."
+            raw_input("[Press Enter to continue]")
+            return
         while choice < 1 or choice > server_alerts+1:
             self.clear()
             self.print_header()
             print "///////////////////////"
             print "     Server Alerts"
             print "///////////////////////"
-            print "Total alerts: " + str(server_alerts)
+            print "Ports with alerts: " + str(server_alerts)
             i = 0
             print "\nSelect the number of the port you would like to investigate:"
-            for port in self.alerts["nmap"]:
-                print str(i+1) + ". " + str(port) + " (" + self.nm[self.host]['tcp'][port]['name'] + ")"
-                i+=1
+            protocol_list = []
+            for protocol in self.nm[self.host].all_protocols():
+                for port in self.nm[self.host][protocol]:
+                        if 'script' in self.nm[self.host][protocol][port]:
+                            protocol_list.append((protocol, port))
+                            print str(i+1) + ". " + str(port) + " (" + self.nm[self.host][protocol][port]['name'] + ")"
+                            i+=1
+                            break
             print "--------------------------------------------------\n" + str(i+1) + ". Return to main menu"
             choice = raw_input(">")
             try: 
@@ -329,11 +360,12 @@ class AutoTester:
             if choice == str(server_alerts+1):
                 break
             elif choice != '' and int(choice) >= 1 and int(choice) <= server_alerts+1:
-                self.server_selection_menu(self.alerts["nmap"].keys()[int(choice)-1])
+                self.server_selection_menu(protocol_list[int(choice)-1][0], protocol_list[int(choice)-1][1])
             else:
                 print "Invalid input."
                 raw_input("[Press Enter to continue]")
-                
+    
+    #menu to select an individual web app alert
     def webapp_selection_menu(self, priority_list, priority):
         choice = 0
         while choice < 1 or choice > len(priority_list)+1:
@@ -364,9 +396,10 @@ class AutoTester:
                 print "Invalid input."
                 raw_input("[Press Enter to continue]")
     
-    def server_selection_menu(self, port):
+    #menu to select an individual server alert
+    def server_selection_menu(self, protocol, port):
         choice = 0
-        server_alerts = len(self.nm[self.host]['tcp'][port]['script'])
+        server_alerts = len(self.nm[self.host][protocol][port]['script'])
         while choice < 1 or choice > server_alerts+1:
             self.clear()
             self.print_header()
@@ -376,7 +409,7 @@ class AutoTester:
             print "Total alerts: " + str(server_alerts)
             i = 0
             print "\nSelect the number of the alert you would like to investigate:"
-            for alert in self.nm[self.host]['tcp'][port]['script']:
+            for alert in self.nm[self.host][protocol][port]['script']:
                 print str(i+1) + ". " + alert
                 i+=1
             print "--------------------------------------------------\n" + str(i+1) + ". Return to alerts menu"
@@ -390,11 +423,12 @@ class AutoTester:
             if choice == str(server_alerts+1):
                 break
             elif choice != '' and int(choice) >= 1 and int(choice) <= server_alerts+1:
-                self.server_choice_menu(self.nm[self.host]['tcp'][port]['script'][self.nm[self.host]['tcp'][port]['script'].keys()[int(choice)-1]])
+                self.server_choice_menu(protocol, port, self.nm[self.host][protocol][port]['script'].keys()[int(choice)-1])
             else:
                 print "Invalid input."
                 raw_input("[Press Enter to continue]")
-                
+    
+    #screen displaying a specific web app alert
     def webapp_choice_menu(self, alert_info):
         description = alert_info[0].get("description")
         risk = alert_info[0].get("risk")
@@ -422,42 +456,17 @@ class AutoTester:
             else:
                 print "Invalid input."
                 raw_input("[Press Enter to continue]")
-                
-    def server_choice_menu(self, alert_info):
+     
+    #screen displaying a specific server alert
+    def server_choice_menu(self, protocol, port, alert):
         self.clear()
         self.print_header()
         print "//////////////////////////////////////////////////////////"
-        print "     " + alert_info
+        print "     " + alert
         print "//////////////////////////////////////////////////////////"
-        for item in alert_info:
-            print item.encode("ascii")
+        print self.nm[self.host][protocol][port]['script'][alert]
+        raw_input("[Press Enter to continue]")
 
-#first screen of the program. the hostname of the target is entered here.
-def startup():
-    os.system('cls' if os.name == 'nt' else 'clear')
-    print "              /////////////////////////////////////////"
-    print "                       OWASP PEN TESTING TOOL          "
-    print "                           (Working Title)             "
-    print "              /////////////////////////////////////////"
-    status = 500
-    host = None
-    seed = None
-    while status >= 400:
-        seed = raw_input("\nEnter the URL of the web application you would like to begin testing:\n>")
-        try:
-            status = requests.get(seed).status_code
-            host = urlparse(seed)[1]
-            try:
-                socket.gethostbyname(host)
-            except:
-                print "Error. Invalid host " + host
-                status = 500
-                continue
-        except:
-            status = 404
-        if(status >= 400):
-            print "Error. Couldn't connected to " + seed + "\nStatus code: " + str(status) + ""
-    autotester = AutoTester(host, seed)
-    
-startup()
+#initialize the autotest object (start the program)    
+autotester = AutoTester()
                 
